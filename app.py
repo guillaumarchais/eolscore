@@ -38,6 +38,7 @@ if "project_name" not in st.session_state:
 for cid, _, _, _ in AXES:
     st.session_state.setdefault(f"score_{cid}", 5)
     st.session_state.setdefault(f"weight_{cid}", 2)
+    st.session_state.setdefault(f"comment_{cid}", "")
 
 
 def threshold_for(weight: int) -> int:
@@ -78,6 +79,11 @@ st.markdown("""
   .tag-watch { background:rgba(184,134,59,0.18); color:#b8863b; padding:2px 8px; border-radius:10px; font-size:0.75rem; }
   .tag-block { background:rgba(179,58,58,0.16); color:#b33a3a; padding:2px 8px; border-radius:10px; font-size:0.75rem; }
   .synthesis-box { background:rgba(90,110,100,0.08); border:1px solid #dcd8cd; border-radius:6px; padding:12px 14px; }
+  @media print {
+    header[data-testid="stHeader"], .stToolbar, #MainMenu, footer, .stDownloadButton, .stButton { display:none !important; }
+    iframe { border:none !important; }
+    .stApp { background:#ffffff !important; }
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -108,6 +114,10 @@ with col_sliders:
             level, label = interpret(st.session_state[f"score_{cid}"], st.session_state[f"weight_{cid}"])
             st.markdown(f'<span class="tag-{level}">{label} (seuil {threshold_for(st.session_state[f"weight_{cid}"])})</span>',
                         unsafe_allow_html=True)
+            st.session_state[f"comment_{cid}"] = st.text_area(
+                "Commentaire", value=st.session_state[f"comment_{cid}"],
+                key=f"comment_area_{cid}", placeholder="Justifier la note et la pondération…",
+                height=68, label_visibility="collapsed")
             st.write("")
     if st.button("Réinitialiser les notes"):
         for cid, _, _, _ in AXES:
@@ -168,6 +178,24 @@ function makeTextSprite(text, color, scale){
   return spr;
 }
 
+function makeAxisLabel(text, color){
+  const canvas = document.createElement('canvas');
+  canvas.width = 220; canvas.height = 84;
+  const ctx = canvas.getContext('2d');
+  ctx.font = '600 21px -apple-system, Arial, sans-serif';
+  ctx.fillStyle = color; ctx.textAlign='center'; ctx.textBaseline='middle';
+  const words = text.split(' ');
+  const lines = []; let cur = '';
+  words.forEach(w=>{ if((cur+' '+w).trim().length>15){ lines.push(cur.trim()); cur=w; } else { cur=(cur+' '+w).trim(); } });
+  if(cur) lines.push(cur);
+  const startY = canvas.height/2 - (lines.length-1)*13;
+  lines.forEach((ln,i)=> ctx.fillText(ln, canvas.width/2, startY + i*26));
+  const tex = new THREE.CanvasTexture(canvas); tex.minFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false });
+  const spr = new THREE.Sprite(mat); spr.scale.set(38, 38*(84/220), 1);
+  return spr;
+}
+
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true, preserveDrawingBuffer:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
@@ -177,7 +205,7 @@ scene.add(new THREE.AmbientLight(0xffffff,0.75));
 const dl = new THREE.DirectionalLight(0xffffff,0.6); dl.position.set(120,180,120); scene.add(dl);
 const group = new THREE.Group(); scene.add(group);
 
-let radius=320, theta=Math.PI/3.2, phi=Math.PI/2.3;
+let radius=380, theta=Math.PI/3.2, phi=Math.PI/2.3;
 const target = new THREE.Vector3(-15,20,0);
 
 function resize(){
@@ -242,6 +270,10 @@ function rebuild(){
     const top = new THREE.Mesh(new THREE.SphereGeometry(3.6,16,16), new THREE.MeshStandardMaterial({color, roughness:0.4, metalness:0.05}));
     top.position.set(x,h,z); group.add(top);
     topPts.push(new THREE.Vector3(x,h,z));
+
+    const axisLbl = makeAxisLabel(a.label, a.color);
+    axisLbl.position.set((maxR+36)*Math.cos(ang), 2, (maxR+36)*Math.sin(ang));
+    group.add(axisLbl);
   });
 
   const loop = topPts.concat([topPts[0]]);
@@ -360,9 +392,35 @@ lines.append(f"Volume du projet vs référence : {pct:.0f}% ({'+' if diff >= 0 e
 lines.append("")
 lines.append(msg)
 
-st.download_button(
-    "Exporter les résultats (TXT)",
-    data="\n".join(lines),
-    file_name=f"{(st.session_state.project_name or 'projet-eolien-3d').strip().replace(' ', '-')}-resultats.txt",
-    mime="text/plain",
-)
+for p in PILLARS:
+    for c in p["criteria"]:
+        cid = c["id"]
+        cm = st.session_state.get(f"comment_{cid}", "").strip()
+        if cm:
+            lines.append(f"Commentaire — {c['label']} : {cm}")
+
+col_dl, col_print = st.columns(2)
+with col_dl:
+    st.download_button(
+        "Exporter les résultats (TXT)",
+        data="\n".join(lines),
+        file_name=f"{(st.session_state.project_name or 'projet-eolien-3d').strip().replace(' ', '-')}-resultats.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
+with col_print:
+    components.html("""
+        <div style="text-align:center;">
+        <button id="printBtn" style="width:100%; font-family:-apple-system,Arial,sans-serif; font-size:14px;
+          color:#5c655f; background:#fff; border:1px solid #dcd8cd; border-radius:5px; padding:9px 14px; cursor:pointer;">
+          Exporter / imprimer tout (PDF)
+        </button>
+        </div>
+        <script>
+        document.getElementById('printBtn').addEventListener('click', function(){
+          try { window.parent.print(); } catch(e) { window.print(); }
+        });
+        </script>
+    """, height=46)
+st.caption("L'impression (Ctrl/Cmd+P ou le bouton ci-dessus) ouvre la boîte de dialogue du navigateur : "
+           "choisissez « Enregistrer au format PDF » pour exporter toute la page, curseurs, scène 3D et commentaires inclus.")
